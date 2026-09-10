@@ -149,8 +149,6 @@ def run_agent_test_rollout(
     release = load_public_release(benchmark)
     _test_release_is_training_prohibited(release.root)
     target_case_ids = _read_release_case_ids(benchmark)
-    if output_dir.exists() and any(output_dir.iterdir()):
-        raise FileExistsError(f"output directory must be new or empty: {output_dir}")
     if concurrency < 1:
         raise ValueError("concurrency must be positive")
     if maximum_attempts < 1:
@@ -158,23 +156,35 @@ def run_agent_test_rollout(
     if timeout <= 0:
         raise ValueError("timeout must be positive")
 
-    output_dir.mkdir(parents=True, exist_ok=False)
-    _write_json(
-        output_dir / "run-config.json",
-        {
-            "schema_version": SCHEMA_VERSION,
-            "benchmark": str(benchmark),
-            "release_id": release.release_id,
-            "release_stage": release.release_stage,
-            "training_prohibited": True,
-            "profile": profile,
-            "concurrency": concurrency,
-            "base_seed": base_seed,
-            "timeout": timeout,
-            "maximum_attempts": maximum_attempts,
-            "target_case_count": len(target_case_ids),
-        },
-    )
+    config = {
+        "schema_version": SCHEMA_VERSION,
+        "benchmark": str(benchmark),
+        "release_id": release.release_id,
+        "release_stage": release.release_stage,
+        "training_prohibited": True,
+        "profile": profile,
+        "concurrency": concurrency,
+        "base_seed": base_seed,
+        "timeout": timeout,
+        "maximum_attempts_per_invocation": maximum_attempts,
+        "target_case_count": len(target_case_ids),
+    }
+    config_path = output_dir / "run-config.json"
+    if output_dir.exists() and any(output_dir.iterdir()):
+        if not config_path.is_file():
+            raise FileExistsError(
+                f"non-empty output directory lacks run-config.json: {output_dir}"
+            )
+        existing = _read_json(config_path)
+        for key in ("benchmark", "release_id", "profile", "target_case_count"):
+            if existing.get(key) != config.get(key):
+                raise ValueError(
+                    f"resume configuration mismatch for {key}: "
+                    f"existing={existing.get(key)!r}, requested={config.get(key)!r}"
+                )
+    else:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(config_path, config)
     (output_dir / "target-case-list.txt").write_text(
         "".join(f"{case_id}\n" for case_id in target_case_ids),
         encoding="utf-8",

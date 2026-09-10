@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.agent_test_retry import _merge_successful_attempts
 from scripts.run_agent_test_rollout import _build_agent_results
 
 
@@ -71,3 +72,38 @@ def test_build_agent_results_rejects_non_terminal_merged_trace(tmp_path: Path):
 
     with pytest.raises(ValueError, match="not terminal success"):
         _build_agent_results(merged_dir=merged, target_case_ids=["case-a"])
+
+
+def test_retry_merge_adds_new_success_without_replacing_existing(tmp_path: Path):
+    group = tmp_path / "rollouts" / "test"
+    for attempt, case_id in (("attempt-01", "case-a"), ("attempt-02", "case-b")):
+        trace_path = group / attempt / "traces" / f"{case_id}.json"
+        _write_json(
+            trace_path,
+            {
+                "case_id": case_id,
+                "image_id": f"episode-{case_id}",
+                "termination": "success",
+                "verdict": "real",
+            },
+        )
+        _write_json(
+            group / attempt / "run_manifest.json",
+            {"git_commit": "test", "benchmark": "cases.jsonl"},
+        )
+        if case_id == "case-a":
+            merged, _ = _merge_successful_attempts(
+                group_dir=group,
+                group_name="test",
+                target_ids=["case-a", "case-b"],
+            )
+            assert len(_read_jsonl(merged / "trace-provenance.jsonl")) == 1
+
+    merged, manifest = _merge_successful_attempts(
+        group_dir=group,
+        group_name="test",
+        target_ids=["case-a", "case-b"],
+    )
+
+    assert manifest["result"]["num_errors"] == 0
+    assert len(_read_jsonl(merged / "trace-provenance.jsonl")) == 2

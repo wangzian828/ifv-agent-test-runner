@@ -12,11 +12,14 @@
 2. 根据目标服务器实际服务确定两个模型各自的 Base URL、API key 环境变量、wire format 和真实 model ID。
 3. 验证模型支持图片输入、原生工具调用、长上下文和多轮 tool response。
 4. 配置 Serper、Jina、百度 OCR 和 OSS；禁止本地 OCR。
-5. 从目标服务器已有数据集构建一次完整测试 release，预计约 1,684 条，以 manifest 实际行数为准。
-6. 分别运行 `GPT-5.5` 和 `Qwen3.5-397B-A17B`，不得共用输出目录。
-7. 持续监控至全部工程重试结束，不能只启动进程后停止任务。
-8. 核对每个 case 都有 terminal success 或明确工程失败。
-9. 交付两个模型的完整结果目录和汇总，不运行 private-gold judge、SFT 或 RL。
+5. 先构建 5 条 smoke release，分别真实运行两个模型。
+6. 只有两个模型的 smoke 都达到 5/5 terminal success、工具链正常且轨迹可读，才允许构建和启动完整测试 release。
+7. 从目标服务器已有数据集构建一次完整测试 release，预计约 1,684 条，以 manifest 实际行数为准。
+8. 分别运行 `GPT-5.5` 和 `Qwen3.5-397B-A17B`，不得共用输出目录。
+9. 持续监控至全部工程重试结束，不能只启动进程后停止任务。
+10. 发现工程错误时必须使用同一输出目录继续重跑；入口只补失败 case，不重跑已成功 case。
+11. `engineering_error_count` 不为零时任务不得宣告完成。必须继续重跑，或明确记录多轮重试后仍无法解决的外部阻塞。
+12. 交付两个模型的完整结果目录和汇总，不运行 private-gold judge、SFT 或 RL。
 
 不得修改或依赖原项目服务器的绝对代码路径。本仓库可克隆到任意目录；数据集、release 和输出目录全部通过命令参数传入。
 
@@ -46,6 +49,43 @@ git clone https://github.com/wangzian828/ifv-agent-test-runner.git
 cd ifv-agent-test-runner
 python -m pip install -e .
 ```
+
+## 真实 Agent Smoke
+
+全量前必须先从同一数据集生成 5 条 smoke release：
+
+```bash
+python scripts/prepare_agent_test_release.py \
+  --dataset-root /path/to/full-test-dataset \
+  --test-manifest /path/to/full-test-dataset/test-manifest.jsonl \
+  --private-gold-sidecar /path/to/full-test-dataset/evaluator_private/private-gold-v1/private-gold.jsonl \
+  --output-dir /path/to/runtime-releases/smoke-5 \
+  --limit 5
+```
+
+分别真实运行两个模型：
+
+```bash
+scripts/run_agent_test.sh \
+  --benchmark /path/to/runtime-releases/smoke-5/runtime-release/runtime_input/cases.jsonl \
+  --output-dir /path/to/results/smoke-gpt55
+```
+
+```bash
+scripts/run_agent_test.sh \
+  --benchmark /path/to/runtime-releases/smoke-5/runtime-release/runtime_input/cases.jsonl \
+  --output-dir /path/to/results/smoke-qwen35-397b-a17b
+```
+
+全量启动门槛：
+
+- 两个模型均为 `target_case_count=5`；
+- 两个模型均为 `successful_case_count=5`；
+- `engineering_error_count=0`；
+- 主 Agent、图片输入、工具调用、tool response、Serper、Jina、百度 OCR 和 OSS 均实际可用；
+- merged trace 中保留完整 raw history，最终 verdict 为有效 `real/fake`。
+
+任一模型 smoke 未通过时，先修复配置或代码并重新跑 smoke，禁止直接启动全量。
 
 ## 准备完整测试集
 
@@ -97,6 +137,26 @@ scripts/run_agent_test.sh \
 ```
 
 启动前检查同一模型是否已有进程，禁止重复启动。所有服务器进程必须设置 `OMP_NUM_THREADS=1`。
+
+## 工程错误重跑
+
+入口默认每次执行最多进行 4 轮工程尝试。全量结束后检查：
+
+```bash
+cat /path/to/results/agent-test-<model>/summary.json
+```
+
+如果 `engineering_error_count > 0`，使用完全相同的 benchmark、模型配置和输出目录再次执行原命令：
+
+```bash
+scripts/run_agent_test.sh \
+  --benchmark /path/to/runtime-releases/full-test/runtime-release/runtime_input/cases.jsonl \
+  --output-dir /path/to/results/agent-test-<model>
+```
+
+恢复运行会读取已有 attempts，只把没有 terminal success 的 case 加入新一轮，不会重跑已经成功的 case。不得删除旧 attempt、手工改写 trace，或新建另一个目录后丢失失败链路。
+
+只有 `engineering_error_count=0` 才视为完整跑通。如果多轮重跑后仍因 provider 内容拦截、持续网络不可用或权限问题无法完成，必须保留所有 attempt，并在最终交付中逐条列出未解决 case 和最后错误；不能把它们计为模型二分类结果。
 
 ## 输出
 

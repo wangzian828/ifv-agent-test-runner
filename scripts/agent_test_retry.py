@@ -181,10 +181,6 @@ def _merge_successful_attempts(
 ) -> tuple[Path, dict[str, Any]]:
     merged_dir = group_dir / "merged"
     manifest_path = merged_dir / "run_manifest.json"
-    if manifest_path.is_file():
-        return merged_dir, _read_json(manifest_path)
-    if merged_dir.exists() and any(merged_dir.iterdir()):
-        raise FileExistsError(f"refusing to overwrite partial merged run: {merged_dir}")
 
     attempts = _attempt_dirs(group_dir)
     selected = _successful_trace_sources(attempts)
@@ -202,7 +198,7 @@ def _merge_successful_attempts(
         attempt_dir, source_path, summary = selected[case_id]
         destination = trace_root / source_path.name
         if destination.exists():
-            raise FileExistsError(f"duplicate merged trace path: {destination}")
+            continue
         method = _copy_or_link(source_path, destination)
         materialization[method] += 1
         provenance.append(
