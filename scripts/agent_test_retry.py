@@ -192,14 +192,18 @@ def _merge_successful_attempts(
     unresolved = sorted(target_set - set(selected))
     trace_root = merged_dir / "traces"
     trace_root.mkdir(parents=True, exist_ok=True)
-    materialization = {"hardlink": 0, "copy": 0}
+    materialization = {"hardlink": 0, "copy": 0, "existing": 0}
     provenance: list[dict[str, Any]] = []
     for case_id in sorted(selected):
         attempt_dir, source_path, summary = selected[case_id]
         destination = trace_root / source_path.name
         if destination.exists():
-            continue
-        method = _copy_or_link(source_path, destination)
+            existing = _read_json(destination)
+            if _trace_summary(existing) != summary:
+                raise ValueError(f"existing merged trace differs: {destination}")
+            method = "existing"
+        else:
+            method = _copy_or_link(source_path, destination)
         materialization[method] += 1
         provenance.append(
             {
