@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.agent_test_retry import _merge_successful_attempts
+from scripts.agent_test_retry import _merge_successful_attempts, _read_jsonl
 from scripts.run_agent_test_rollout import _build_agent_results
 
 
