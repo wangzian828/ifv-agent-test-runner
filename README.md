@@ -19,7 +19,7 @@
 9. 持续监控至全部工程重试结束，不能只启动进程后停止任务。
 10. 发现工程错误时必须使用同一输出目录继续重跑；入口只补失败 case，不重跑已成功 case。
 11. `engineering_error_count` 不为零时任务不得宣告完成。必须继续重跑，或明确记录多轮重试后仍无法解决的外部阻塞。
-12. 交付两个模型的完整结果目录和汇总，不运行 private-gold judge、SFT 或 RL。
+12. 在运行服务器保留两个模型的完整结果目录；回传时各生成一个精简 judge handoff 压缩包和汇总，不运行 private-gold judge、SFT 或 RL。
 
 不得修改或依赖原项目服务器的绝对代码路径。本仓库可克隆到任意目录；数据集、release 和输出目录全部通过命令参数传入。
 
@@ -160,7 +160,7 @@ scripts/run_agent_test.sh \
 
 ## 输出
 
-每个模型至少产生：
+服务器上的每个模型运行目录至少产生：
 
 ```text
 summary.json
@@ -174,6 +174,38 @@ rollouts/
 
 本仓库不读取 private gold 进行评估。二分类准确率和证据质量 judge 在结果回收后由其他流程单独完成。
 
+## 回传给 judge 的精简交接包
+
+`rollouts/` 是运行端的恢复与工程审计目录，不需要逐文件回传给 judge。下游 judge 只消费每个 case 最终选中的完整 terminal trace、结果、运行配置和来源 attempt；原始测试图在接收端按 `case_id` 从同一冻结测试集读取。非选中的失败 attempt、工具 artifact 二进制、快照和 request-context 边文件都不参与 judge。
+
+工程重试完成后，为每个模型生成一个流式压缩文件：
+
+```bash
+python scripts/package_agent_judge_handoff.py \
+  --run-dir /path/to/results/agent-test-gpt55 \
+  --output /path/to/handoff/gpt55-judge-handoff.jsonl.gz
+
+python scripts/package_agent_judge_handoff.py \
+  --run-dir /path/to/results/agent-test-qwen35-397b-a17b \
+  --output /path/to/handoff/qwen35-397b-a17b-judge-handoff.jsonl.gz
+```
+
+打包器默认要求 `engineering_error_count=0`，不会把未完成运行误交给 judge。每个压缩包内部第一行是 manifest，其余为一 case 一行；成功 case 内嵌最终完整 trace 和来源 attempt，未投放 private gold、凭据或测试图片。回传前执行流式完整性校验：
+
+```bash
+python scripts/package_agent_judge_handoff.py \
+  --verify /path/to/handoff/gpt55-judge-handoff.jsonl.gz
+```
+
+因此正常回传只需要两个物理文件：
+
+```text
+gpt55-judge-handoff.jsonl.gz
+qwen35-397b-a17b-judge-handoff.jsonl.gz
+```
+
+把校验命令输出的 SHA256 写在最终交接回复中，无需再创建 checksum 边文件。运行端继续保留原始 `rollouts/`，若接收端本地测试 manifest 的 SHA256 与包内记录不一致，再单独补一份共享测试 release；禁止为两个模型重复复制同一批测试图片。
+
 ## 最终交付说明
 
 接手 Codex 最终回复必须列出：
@@ -186,7 +218,8 @@ rollouts/
 - 两个模型各自的输出目录；
 - target、success、engineering error 数量；
 - attempt 数量和是否存在未解决 case；
-- `summary.json`、`agent-results.jsonl` 和 merged traces 的路径；
+- 服务器上 `summary.json`、`agent-results.jsonl` 和 merged traces 的路径；
+- 两个 `*-judge-handoff.jsonl.gz` 的路径、大小和 SHA256；
 - 是否确认无 private-gold 泄漏、无本地 OCR、无遗留运行进程。
 
 API key、密码、private gold、完整 env 文件和测试图片不得提交到 GitHub。
